@@ -14,8 +14,9 @@ class EmailVerificationHandler:
         self.epin = Config().get_temp_mail_epin()
         self.session = requests.Session()
         self.emailExtension = Config().get_temp_mail_ext()
+        self.account = ''
 
-    def get_verification_code(self, max_retries=5, retry_interval=60):
+    def get_verification_code(self, max_retries=5, retry_interval=30):
         """
         获取验证码，带有重试机制。
 
@@ -61,50 +62,59 @@ class EmailVerificationHandler:
             time.sleep(3)
         if retry >= 20:
             raise Exception("获取验证码超时")
-        try:
-            # 连接到IMAP服务器
-            mail = imaplib.IMAP4_SSL(self.imap['imap_server'], self.imap['imap_port'])
-            mail.login(self.imap['imap_user'], self.imap['imap_pass'])
-            mail.select(self.imap['imap_dir'])
+        body = None
+        for _ in range(3):
+            try:
+                # 连接到IMAP服务器
+                mail = imaplib.IMAP4_SSL(self.imap['imap_server'], self.imap['imap_port'])
+                mail.login(self.imap['imap_user'], self.imap['imap_pass'])
+                mail.select(self.imap['imap_dir'])
 
-            status, messages = mail.search(None, 'FROM', '"no-reply@cursor.sh"')
-            if status != 'OK':
+                status, messages = mail.search(None, 'FROM', '"no-reply@cursor.sh"')
+                if status != 'OK':
+                    return None
+
+                mail_ids = messages[0].split()
+                if not mail_ids:
+                    # 没有获取到，就在获取一次
+                    return self._get_mail_code_by_imap(retry=retry + 1)
+
+                for id in mail_ids[-3:]:
+                    latest_mail_id = id
+
+                    # 获取邮件内容
+                    status, msg_data = mail.fetch(latest_mail_id, '(RFC822)')
+                    if status != 'OK':
+                        return None
+
+                    raw_email = msg_data[0][1]
+                    email_message = email.message_from_bytes(raw_email)
+
+                    # 提取邮件正文
+                    _body = self._extract_imap_body(email_message)
+                    #print(f"邮件内容<{self.account}>: {_body}")
+                    #print(f"------")
+                    if self.account in _body:
+                        body = _body
+                        break
+
+                if body:
+                    # 使用正则表达式查找6位数字验证码
+                    code_match = re.search(r"\b\d{6}\b", body)
+                    if code_match:
+                        code = code_match.group()
+                        # 删除邮件
+                        mail.store(latest_mail_id, '+FLAGS', '\\Deleted')
+                        mail.expunge()
+                        mail.logout()
+                        # print(f"找到的验证码: {code}")
+                        return code
+                # print("未找到验证码")
+                mail.logout()
                 return None
-
-            mail_ids = messages[0].split()
-            if not mail_ids:
-                # 没有获取到，就在获取一次
-                return self._get_mail_code_by_imap(retry=retry + 1)
-
-            latest_mail_id = mail_ids[-1]
-
-            # 获取邮件内容
-            status, msg_data = mail.fetch(latest_mail_id, '(RFC822)')
-            if status != 'OK':
+            except Exception as e:
+                print(f"发生错误: {e}")
                 return None
-
-            raw_email = msg_data[0][1]
-            email_message = email.message_from_bytes(raw_email)
-
-            # 提取邮件正文
-            body = self._extract_imap_body(email_message)
-            if body:
-                # 使用正则表达式查找6位数字验证码
-                code_match = re.search(r"\b\d{6}\b", body)
-                if code_match:
-                    code = code_match.group()
-                    # 删除邮件
-                    mail.store(latest_mail_id, '+FLAGS', '\\Deleted')
-                    mail.expunge()
-                    mail.logout()
-                    # print(f"找到的验证码: {code}")
-                    return code
-            # print("未找到验证码")
-            mail.logout()
-            return None
-        except Exception as e:
-            print(f"发生错误: {e}")
-            return None
 
     def _extract_imap_body(self, email_message):
         # 提取邮件正文

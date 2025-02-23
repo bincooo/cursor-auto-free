@@ -179,7 +179,10 @@ def get_cursor_session_token(tab, max_attempts=3, retry_interval=2):
             cookies = tab.cookies()
             for cookie in cookies:
                 if cookie.get("name") == "WorkosCursorSessionToken":
-                    return cookie["value"].split("%3A%3A")[1]
+                    if os.getenv("RESET_MACHINE_ID", "True").lower() == "true":
+                        return cookie["value"].split("%3A%3A")[1]
+                    else:
+                        return cookie["value"]
 
             attempts += 1
             if attempts < max_attempts:
@@ -402,6 +405,7 @@ if __name__ == "__main__":
     print_logo()
     greater_than_0_45 = check_cursor_version()
     browser_manager = None
+
     try:
         logging.info("\n=== 初始化程序 ===")
         ExitCursor()
@@ -456,41 +460,53 @@ if __name__ == "__main__":
         settings_url = "https://www.cursor.com/settings"
         mail_url = "https://tempmail.plus"
 
-        logging.info("正在生成随机账号信息...")
-        email_generator = EmailGenerator()
-        account = email_generator.generate_email()
-        password = email_generator.default_password
-        first_name = email_generator.default_first_name
-        last_name = email_generator.default_last_name
+        retry = 1
+        if not os.getenv("RESET_MACHINE_ID", "True").lower() == "true":
+            retry = int(os.getenv("RETRY", "1"))
 
-        logging.info(f"生成的邮箱账号: {account}")
-        auto_update_cursor_auth = True
+        for _ in range(retry):
 
-        tab = browser.latest_tab
+            logging.info("正在生成随机账号信息...")
+            email_generator = EmailGenerator()
+            account = email_generator.generate_email()
+            password = email_generator.default_password
+            first_name = email_generator.default_first_name
+            last_name = email_generator.default_last_name
 
-        tab.run_js("try { turnstile.reset() } catch(e) { }")
+            logging.info(f"生成的邮箱账号: {account}")
+            auto_update_cursor_auth = True
+            email_handler.account = account
 
-        logging.info("\n=== 开始注册流程 ===")
-        logging.info(f"正在访问登录页面: {login_url}")
-        tab.get(login_url)
+            tab = browser.latest_tab
 
-        if sign_up_account(browser, tab):
-            logging.info("正在获取会话令牌...")
-            token = get_cursor_session_token(tab)
-            if token:
-                logging.info("更新认证信息...")
-                update_cursor_auth(
-                    email=account, access_token=token, refresh_token=token
-                )
-                logging.info(
-                    "请前往开源项目查看更多信息：https://github.com/chengazhen/cursor-auto-free"
-                )
-                logging.info("重置机器码...")
-                reset_machine_id(greater_than_0_45)
-                logging.info("所有操作已完成")
-                print_end_message()
-            else:
-                logging.error("获取会话令牌失败，注册流程未完成")
+            tab.run_js("try { turnstile.reset() } catch(e) { }")
+
+            logging.info("\n=== 开始注册流程 ===")
+            logging.info(f"正在访问登录页面: {login_url}")
+            tab.get(login_url)
+
+            if sign_up_account(browser, tab):
+                logging.info("正在获取会话令牌...")
+                token = get_cursor_session_token(tab)
+                if token:
+                    logging.info("更新认证信息...")
+                    update_cursor_auth(
+                        email=account, access_token=token, refresh_token=token
+                    )
+                    logging.info(
+                        "请前往开源项目查看更多信息：https://github.com/chengazhen/cursor-auto-free"
+                    )
+                    if os.getenv("RESET_MACHINE_ID", "True").lower() == "true":
+                        logging.info("重置机器码...")
+                        reset_machine_id(greater_than_0_45)
+                    else:
+                        with open('cookies.txt', 'a+') as f:
+                            f.write(token + '\n')
+
+                    logging.info("所有操作已完成")
+                    print_end_message()
+                else:
+                    logging.error("获取会话令牌失败，注册流程未完成")
 
     except Exception as e:
         logging.error(f"程序执行出现错误: {str(e)}")
